@@ -7,18 +7,16 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from concurrent.futures import ThreadPoolExecutor
+import re
 
 url = "https://store.exertissupplies.co.uk/"
 
-chrome_options = Options()
-chrome_options.add_argument("--headless")
-driver = webdriver.Chrome(options=chrome_options)
+driver = webdriver.Chrome()
 driver.get(url)
 
 try:
     logged_in_body = driver.find_element(By.CSS_SELECTOR, "body.ex-loggedin")
+    print("Already logged in. Skipping login.")
 except NoSuchElementException:
     try:
         login_form = driver.find_element(By.CSS_SELECTOR, "form.auth-form.login-form")
@@ -35,7 +33,7 @@ except NoSuchElementException:
         time.sleep(3)
 
     except NoSuchElementException:
-        pass
+        print("Login form not found.")
 
 df = pd.read_csv('product_data.csv')
 
@@ -49,86 +47,83 @@ except FileNotFoundError:
 
 total_no_results_count = 0
 
-def extract_data(product_code):
-    nonlocal existing_product_codes, total_no_results_count
+for i in range(0, len(df), batch_size):
+    batch_df = df.iloc[i:i + batch_size]
 
-    if product_code in existing_product_codes:
-        return None
+    extracted_data = []
+    no_results_count = 0
 
-    search_input = WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, "input.ajax-search-control"))
-    )
-    search_input.clear()
-    search_input.send_keys(product_code)
+    for product_code in batch_df['product_code']:
+        if product_code in existing_product_codes:
+            continue
 
-    try:
-        result_container = WebDriverWait(driver, 10).until(
-            EC.visibility_of_element_located((By.CSS_SELECTOR, ".ajax-results"))
-        )
-        first_result = result_container.find_element("tag name", "a")
-        first_result.click()
-
-        WebDriverWait(driver, 10).until(
-            EC.visibility_of_element_located((By.CLASS_NAME, "prod-code"))
-        )
-
-        soup = BeautifulSoup(driver.page_source, "html.parser")
+        search_input = driver.find_element("css selector", "input.ajax-search-control")
+        search_input.clear()
+        search_input.send_keys(product_code)
+        time.sleep(2)
 
         try:
-            product_code = soup.find("div", class_="prod-code").find('span').get_text().strip()
-        except AttributeError:
-            product_code = ''
+            result_container = driver.find_element("css selector", ".ajax-results")
+            first_result = result_container.find_element("tag name", "a")
+            first_result.click()
 
-        try:
-            product_category = soup.find("div", class_="prod-category").find('a').get_text().strip()
-        except AttributeError:
-            product_category = ''
+            time.sleep(2)
 
-        try:
-            product_name = soup.find("h1", class_="product-name").get_text().strip()
-        except AttributeError:
-            product_name = ''
+            soup = BeautifulSoup(driver.page_source, "html.parser")
 
-        try:
-            product_manufacturer_name = soup.find("div", class_="manufacturer-name").find('span').get_text().strip()
-        except AttributeError:
-            product_manufacturer_name = ''
+            try:
+                product_code = soup.find("div", class_="prod-code").find('span').get_text().strip()
+            except AttributeError:
+                product_code = ''
 
-        try:
-            filter_container = soup.find("div", class_="filter-container")
-            product_price = filter_container.find("span", class_="has-price").get_text().strip()
-            product_price = re.sub(r'[^0-9.]', '', product_price)
-        except AttributeError:
-            product_price = ''
+            try:
+                product_category = soup.find("div", class_="prod-category").find('a').get_text().strip()
+            except AttributeError:
+                product_category = ''
 
-        try:
-            product_stock = soup.find("strong", class_="live-stock-content").find('strong').get_text().strip()
-        except AttributeError:
-            product_stock = ''
+            try:
+                product_name = soup.find("h1", class_="product-name").get_text().strip()
+            except AttributeError:
+                product_name = ''
 
-        return {
-            "product_code": product_code.replace('Product Code: ', ''),
-            "product_category": product_category,
-            "product_name": product_name,
-            "product_price": product_price,
-            "product_stock": product_stock,
-            "product_manufacturer_name": product_manufacturer_name.replace('Manufacturer ', ''),
-        }
+            try:
+                product_manufacturer_name = soup.find("div", class_="manufacturer-name").find('span').get_text().strip()
+            except AttributeError:
+                product_manufacturer_name = ''
 
-    except NoSuchElementException:
-        total_no_results_count += 1
-        return None
+            try:
+                filter_container = soup.find("div", class_="filter-container")
+                product_price = filter_container.find("span", class_="has-price").get_text().strip()
+                product_price = re.sub(r'[^0-9.]', '', product_price)
+            except AttributeError:
+                product_price = ''
+                
+            try:
+                product_stock = soup.find("strong", class_="live-stock-content").find('strong').get_text().strip()
+            except AttributeError:
+                product_stock = ''
 
-with ThreadPoolExecutor() as executor:
-    extracted_data = list(executor.map(extract_data, df['product_code']))
+            extracted_data.append({
+                "product_code": product_code.replace('Product Code: ', ''),
+                "product_category": product_category,
+                "product_name": product_name,
+                "product_price": product_price,
+                "product_stock": product_stock,
+                "product_manufacturer_name": product_manufacturer_name.replace('Manufacturer ', ''),
+            })
 
-extracted_data = [data for data in extracted_data if data is not None]
+        except NoSuchElementException:
+            # print(f"No search results found for product code: {product_code}")
+            no_results_count += 1
+            total_no_results_count += 1
 
-result_df = pd.DataFrame(extracted_data, columns=['product_code', 'product_category', 'product_name', 'product_price', 'product_stock', 'product_manufacturer_name'])
-result_df.to_csv('extracted_data.csv', mode='a', header=(not existing_product_codes), index=False)
+    result_df = pd.DataFrame(extracted_data, columns=['product_code', 'product_category', 'product_name', 'product_price', 'product_stock', 'product_manufacturer_name'])
+    result_df.to_csv('extracted_data.csv', mode='a', header=(not existing_product_codes), index=False)
 
-existing_product_codes.update(result_df['product_code'])
+    existing_product_codes.update(result_df['product_code'])
 
-print(f"Inserted {len(result_df)} records. (Total No result found: {total_no_results_count})")
+    extracted_data = []
+
+    print(f"Inserted {len(result_df)} records in {i + batch_size} batch. (Total No result found: {total_no_results_count})")
 
 driver.quit()
