@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from selenium.webdriver.chrome.options import Options
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
@@ -7,11 +9,15 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 import re
+from webdriver_manager.chrome import ChromeDriverManager
+
+chrome_options = Options()
 
 url = "https://store.exertissupplies.co.uk/"
 
-driver = webdriver.Chrome()
+driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
 driver.get(url)
 
 try:
@@ -37,7 +43,7 @@ except NoSuchElementException:
 
 df = pd.read_csv('product_data.csv')
 
-batch_size = 100
+batch_size = 10
 
 try:
     existing_data_df = pd.read_csv('extracted_data.csv')
